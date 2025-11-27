@@ -37,6 +37,8 @@ from acp.schema import (
     FileSystemCapability,
     InitializeRequest,
     NewSessionRequest,
+    StdioMcpServer,
+    EnvVariable,
     PermissionOption,
     PromptRequest,
     RequestPermissionRequest,
@@ -72,6 +74,9 @@ def _pick_preferred_option(options: Iterable[PermissionOption]) -> PermissionOpt
     return best
 
 
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+
+
 class MyInMemoryMessageStateStore(InMemoryMessageStateStore):
     def __init__(self, client_impl):
         super().__init__()
@@ -88,6 +93,8 @@ class MyInMemoryMessageStateStore(InMemoryMessageStateStore):
                 stop_reason = getattr(result, "stopReason", None)
             if stop_reason == "end_turn":
                 # Schedule the async flush and queue end-of-turn sentinel
+                if LOG_LEVEL=="DEBUG":
+                    print(f"resolve_outgoing: {result}")
                 asyncio.create_task(self._client_impl._on_end_turn())
         except Exception:
             # Never let flushing interfere with state resolution
@@ -167,6 +174,9 @@ class EventEmitter:
         params: SessionNotification,
     ) -> None:  # type: ignore[override]
         update = params.update
+        # if LOG_LEVEL=="DEBUG":
+        #     if update.__class__.__name__ not in ["AgentMessageChunk", "AgentThoughtChunk"]:
+        #         print(f"sessionUpdate: {update}")
         if isinstance(update, AgentMessageChunk):
             await self._accumulate_chunk("agent_message", update.content)
         elif isinstance(update, AgentThoughtChunk):
@@ -230,9 +240,10 @@ class _SDKClientImplementation(EventEmitter, TerminalController, FileSystemContr
     async def _on_end_turn(self) -> None:
         """Called when the agent turn completes."""
         # Flush any accumulated messages
-        await self._flush_accumulated_message(trigger="end_turn")
-        # Queue the end-of-turn sentinel
-        await self._message_queue.put(EndOfTurnMessage())
+        if self.accumulated_message:
+            await self._flush_accumulated_message(trigger="end_turn")
+            # Queue the end-of-turn sentinel
+            await self._message_queue.put(EndOfTurnMessage())
 
     
 
@@ -252,6 +263,7 @@ class PyACPAgentOptions:
     # Additional ACP-specific options
     agent_program: str | None = None  # Path to ACP agent executable
     agent_args: list[str] = field(default_factory=list)  # Args for agent
+    mcp_config: dict[str, Any] | None  = None
 
 
 
@@ -334,13 +346,13 @@ class PyACPSDKClient:
         Args:
             options: Configuration options for the agent
         """
-        self.options = options or PyACPAgentOptions()
+        self.options = options
         self._connection: ClientSideConnection | None = None
         self._session_id: str | None = None
         self._client_impl: _SDKClientImplementation | None = None
         self._message_queue: asyncio.Queue[Message] = asyncio.Queue()
         self._connected = False
-        self._transport_cm = None  # Context manager for the transport
+        self._transport_cm = None  # Context manager for the transport    
 
         # Timing and turn tracking
         self._turn_start_time: float | None = None
@@ -429,13 +441,26 @@ class PyACPSDKClient:
 
         # Create new session
         try:
+            mcpServers =  []
+            if self.options.mcp_config:
+                for name, server_kwargs in self.options.mcp_config.get("mcpServers", []).items():
+                    env_vars = []
+                    for key, value in server_kwargs.get("env", {}).items():
+                        env_vars.append(EnvVariable(name=key, value=value))
+                    # if "env" not in server_kwargs:
+                    server_kwargs["env"] = env_vars
+                        
+                    mcpServers.append(StdioMcpServer(name=name, **server_kwargs))
+            # mcpServers = [StdioMcpServer(command=server["command"], args=server["args"]) for server in mcpServers]
+            print(f"MCP servers: {mcpServers}")
             cwd = self.options.cwd or os.getcwd()
             session = await self._connection.newSession(
                 NewSessionRequest(
                     cwd=str(cwd),
-                    mcpServers=[],
+                    mcpServers=mcpServers,
                 )
             )
+            # print(f"New session: {session}")
             self._session_id = session.sessionId
         except RequestError as err:
             await self._cleanup_connection()

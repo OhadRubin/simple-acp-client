@@ -42,11 +42,12 @@ forced_login_method = "api"
 
 [model_providers.openai_chat]
 name = "OpenAI chat"
-base_url = "http://127.0.0.1:4000/v1"
+base_url = "http://host.docker.internal:4000/v1"
 env_key = "LITELLM_KEY"
 wire_api = "responses"
 
 EOF
 export CODEX_HOME="codex_home"
 export LITELLM_KEY=sk-1234
-printf "$STR_TO_OUTPUT" | uv run python -m examples.interactive codex-acp
+# printf "$STR_TO_OUTPUT" | uv run python -m examples.interactive codex-acp
+printf "$STR_TO_OUTPUT" | python -m examples.interactive codex-acp

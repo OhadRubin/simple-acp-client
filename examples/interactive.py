@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import sys
@@ -70,6 +71,13 @@ async def run(argv: list[str]) -> int:
         return 2
 
     model_id = os.environ.get("ACP_MODEL", None)
+    mcp_config_path = os.environ.get("MCP_CONFIG_PATH", None)
+    if mcp_config_path:
+        with open(mcp_config_path, "r") as f:
+            mcp_config = json.load(f)
+    else:
+        mcp_config = None
+        
     program = argv[1]
     args = argv[2:]
 
@@ -80,6 +88,7 @@ async def run(argv: list[str]) -> int:
     options = PyACPAgentOptions(
         model=model_id,
         cwd=os.getcwd(),
+        mcp_config=mcp_config,
     )
 
     # Create and connect client
